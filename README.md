@@ -1,1 +1,1 @@
-# Password Checker
+# CLI Password Manager
