@@ -1,3 +1,4 @@
+package com.skipass;
 import java.util.*;
 
 public class psswordStats {

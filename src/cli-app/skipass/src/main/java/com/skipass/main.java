@@ -1,6 +1,12 @@
+package com.skipass;
 import java.io.IOException;
 import java.util.*;
 import java.util.regex.*;
+import com.google.gson.Gson;
+
+import com.skipass.psswordStats;
+import com.skipass.psswordStats.Stat;
+
 import java.io.Console;
 
 public class main {
@@ -27,6 +33,26 @@ public class main {
         }
         Matcher matcher = EMAIL_PATTERN.matcher(email);
         return matcher.matches();
+
+    }
+
+
+    public static void signIn(){
+        Scanner scanner = new Scanner(System.in);
+        String user;
+        char password[];
+        Console console = System.console();
+
+        System.out.printf("Enter your email or username: ");
+        user = scanner.nextLine().trim();
+
+        if(console != null){
+            password = System.console().readPassword("Enter password: ");
+        }else{
+            System.out.printf("Secure console isn't active");
+            password = scanner.nextLine().toCharArray();
+        }
+
 
     }
 
