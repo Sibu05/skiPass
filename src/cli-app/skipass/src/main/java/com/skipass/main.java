@@ -1,188 +1,130 @@
 package com.skipass;
-import java.io.IOException;
+
+import java.io.*;
+import java.nio.channels.*;
+import java.nio.file.*;
+import java.security.*;
 import java.util.*;
-import java.util.regex.*;
-import com.google.gson.Gson;
-
-import com.skipass.psswordStats;
-import com.skipass.psswordStats.Stat;
-
-import java.io.Console;
+import javax.crypto.AEADBadTagException;
 
 public class main {
-
-    private static final String EMAIL_REGEX = "^[a-zA-Z0-9_!#$%&'*+/=?`{|}~^-]+(?:\\.[a-zA-Z0-9_!#$%&'*+/=?`{|}~^-]+)*@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*$";
-    private static final Pattern EMAIL_PATTERN = Pattern.compile(EMAIL_REGEX);
+    private static Console console;
     public static void main(String[] args) {
-
-        welcomeMsg();
-
-        randomFact(psswordStats.STATS);
-
-        System.out.print("Press \"ENTER\" to continue...");
-        Scanner scanner = new Scanner(System.in);
-        scanner.nextLine();
-        clearScreen();
-        showAuthmen();
-        scanner.close();
-    }
-
-    public static boolean isValidEmail(String email){
-        if(email == null){
-            return false;
+        if (args.length == 1 && args[0].equals("--help")) {
+            System.out.println("skiPass [vault-path]\nCreate or unlock a local encrypted password vault.");
+            return;
         }
-        Matcher matcher = EMAIL_PATTERN.matcher(email);
-        return matcher.matches();
-
-    }
-
-
-    public static void signIn(){
-        Scanner scanner = new Scanner(System.in);
-        String user;
-        char password[];
-        Console console = System.console();
-
-        System.out.printf("Enter your email or username: ");
-        user = scanner.nextLine().trim();
-
-        if(console != null){
-            password = System.console().readPassword("Enter password: ");
-        }else{
-            System.out.printf("Secure console isn't active");
-            password = scanner.nextLine().toCharArray();
+        if (args.length > 1) { System.err.println("Usage: skiPass [vault-path]"); System.exit(1); }
+        console = System.console();
+        if (console == null) {
+            System.err.println("Run skiPass in a terminal for hidden password input."); System.exit(1);
         }
-
-
-    }
-
-    public static void signUp(){
-        Scanner word = new Scanner(System.in);
-        String emailString, userName;
-        char password[], confirmPass[];
-
-        Console console = System.console();
-
-
-        System.out.println("Fill in the following info.");
-        System.out.println("Enter your email: ");
-        emailString = word.nextLine().trim();
-
-        while(!isValidEmail(emailString)){
-            System.out.println("Enter valid email: ");
-            emailString = word.nextLine().trim();
-        }
-
-        System.out.println("Enter your username: ");
-        userName = word.nextLine();
-
-        if(console != null){
-            password = System.console().readPassword("Enter password: ");
-            confirmPass = System.console().readPassword("Confirm password: ");
-
-            while(!Arrays.equals(password, confirmPass)){
-                System.out.println("Passwords must match!");
-                password = System.console().readPassword("Enter password: ");
-                confirmPass = System.console().readPassword("Confirm password: ");
-
-            }
-        }else{
-            System.out.println("Warning!! Secure console not available.");
-            System.out.println("Enter password: ");
-
-            password = word.nextLine().toCharArray();
-            confirmPass = word.nextLine().toCharArray();
-
-            while(!Arrays.equals(password, confirmPass)){
-                System.out.println("Passwords must match!");
-                password = word.nextLine().toCharArray();
-                confirmPass = word.nextLine().toCharArray();
-
-            }
-        }
-
-    }
-
-
-    public static void showAuthmen(){
-        Scanner opt = new Scanner(System.in);
-        int choice;
-
-        do{
-            System.out.println("=== Welcome to Skipass. ===");
-            System.out.println("1. New to Skipass?");
-            System.out.println("2. Already Skipassed?");
-            System.out.println("3. Exit");
-            System.out.println("Please select opts from (1-3)");
-
-            while(!opt.hasNextInt()){
-                System.out.print("Invalid input detected.\n");
-                System.out.print("Please select opts from (1-3).\n");
-                opt.next();
-            }
-
-            choice = opt.nextInt();
-
-            switch(choice){
-                case 1:
-                    signUp();
-                    break;
-                case 2:
-                    System.out.print("Please enter your username.\n");
-                    break;
-                case 3:
-                    System.exit(0);
-                default:
-                    System.out.println("Invalid Option, try again.");
-            }
-        } while(choice != 3); 
-
-        opt.close();
-    }
-
-
-    public static void clearScreen(){
-        String os = System.getProperty("os.name").toLowerCase();
-        if(os.contains("win")){
-            try{
-                new ProcessBuilder("cmd","/c","cls").inheritIO().start().waitFor();
-            }catch (IOException | InterruptedException e){
-                e.printStackTrace();
-            }
-        }else{
-            try{
-                new ProcessBuilder("clear").inheritIO().start().waitFor();
-                }catch (IOException | InterruptedException e){
-                    e.printStackTrace();
+        Path path = (args.length == 1 ? Path.of(args[0]) : Path.of(System.getProperty("user.home"), ".local", "share", "skipass", "vault.skp")).toAbsolutePath();
+        char[] master = null;
+        try {
+            Files.createDirectories(path.getParent());
+            try (FileChannel channel = FileChannel.open(Path.of(path + ".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
+                 FileLock lock = channel.tryLock()) {
+                if (lock == null) throw new IOException("Vault is open in another skiPass session.");
+                Map<String, vault.Login> entries;
+                boolean creating = !Files.exists(path, LinkOption.NOFOLLOW_LINKS);
+                StartupScreen.show(console, creating);
+                if (!creating) {
+                    master = secret("  Master password > ");
+                    entries = vault.load(path, master);
+                } else {
+                    master = newMaster();
+                    entries = new TreeMap<>();
+                    vault.save(path, entries, master);
+                }
+                console.printf("%n  Vault unlocked. Ready when you are.%n%n");
+                while (true) {
+                    String action = line("[list / add / get / delete / change-master / quit] > ");
+                    switch (action) {
+                        case "list" -> {
+                            if (entries.isEmpty()) console.printf("Vault is empty.%n");
+                            entries.keySet().forEach(name -> console.printf("%s%n", safe(name)));
+                        }
+                        case "add" -> {
+                            String name = line("Entry name: ").trim();
+                            if (name.isEmpty() || entries.containsKey(name)) { console.printf("Name is empty or already exists.%n"); break; }
+                            String username = line("Username: ");
+                            char[] password = secret("Login password (blank generates one): ");
+                            try {
+                                String value = password.length == 0 ? generate() : new String(password);
+                                entries.put(name, new vault.Login(username, value, line("URL (optional): ")));
+                                vault.save(path, entries, master);
+                                console.printf("Login saved.%n");
+                            } finally { Arrays.fill(password, '\0'); }
+                        }
+                        case "get" -> {
+                            var login = entries.get(line("Entry name: "));
+                            if (login == null) { console.printf("Entry not found.%n"); break; }
+                            console.printf("Username: %s%nURL: %s%n", safe(login.username()), safe(login.url()));
+                            if (line("Reveal password on screen? Type yes: ").equals("yes")) console.printf("%s%n", safe(login.password()));
+                        }
+                        case "delete" -> {
+                            String name = line("Entry name: ");
+                            if (!entries.containsKey(name)) { console.printf("Entry not found.%n"); break; }
+                            if (line("Delete this login? Type yes: ").equals("yes")) {
+                                entries.remove(name); vault.save(path, entries, master); console.printf("Login deleted.%n");
+                            }
+                        }
+                        case "change-master" -> {
+                            char[] replacement = newMaster();
+                            try { vault.save(path, entries, replacement); Arrays.fill(master, '\0'); master = replacement.clone(); }
+                            finally { Arrays.fill(replacement, '\0'); }
+                            console.printf("Master password changed.%n");
+                        }
+                        case "quit" -> { return; }
+                        default -> console.printf("Choose one of the listed commands.%n");
+                    }
                 }
             }
+        } catch (AEADBadTagException e) {
+            System.err.println("Wrong master password or damaged vault."); System.exit(1);
+        } catch (IOException | GeneralSecurityException | IllegalArgumentException e) {
+            System.err.println("Error: " + e.getMessage()); System.exit(1);
+        } finally { if (master != null) Arrays.fill(master, '\0'); }
     }
-
-    public static void randomFact(List<psswordStats.Stat> random) {
-        Random rand = new Random();
-        int index = rand.nextInt(random.size());
-        psswordStats.Stat fact = random.get(index);
-        String fax = fact.text();
-        int n = fax.length();
-        String sep = "=".repeat(n);
-        System.out.print(sep + "\n");
-        System.out.print(fact.text() + "\n ~ " + fact.source() + "\n");
-        System.out.print(sep + "\n");
-
+    private static String line(String label) throws EOFException {
+        String result = console.readLine("%s", label);
+        if (result == null) throw new EOFException("Input closed; vault locked.");
+        return result;
     }
-
-    public static void welcomeMsg() {
-        String message = """
-                 ____    __  __   ______   ____    ______  ____    ____
-                /\\  _`\\ /\\ \\/\\ \\ /\\__  _\\ /\\  _`\\ /\\  _  \\/\\  _`\\ /\\  _`\\
-                \\ \\,\\L\\_\\ \\ \\/'/'\\/_/\\ \\/ \\ \\ \\L\\ \\ \\ \\L\\ \\ \\,\\L\\_\\ \\,\\L\\_\\
-                 \\/_\\__ \\\\ \\ , <    \\ \\ \\  \\ \\ ,__/\\ \\  __ \\/_\\__ \\\\/_\\__ \\
-                   /\\ \\L\\ \\ \\ \\\\`\\   \\_\\ \\__\\ \\ \\/  \\ \\ \\/\\ \\/\\ \\L\\ \\/\\ \\L\\ \\
-                   \\ `\\____\\ \\_\\ \\_\\ /\\_____\\\\ \\_\\   \\ \\_\\ \\_\\ `\\____\\ `\\____\\
-                    \\/_____/\\/_/\\/_/ \\/_____/ \\/_/    \\/_/\\/_/\\/_____/\\/_____/
-                                                                               """;
-
-        System.out.print(message + "\n");
-
+    private static char[] secret(String label) throws EOFException {
+        char[] result = console.readPassword("%s", label);
+        if (result == null) throw new EOFException("Input closed; vault locked.");
+        return result;
+    }
+    private static char[] newMaster() throws IOException {
+        while (true) {
+            char[] first = secret("  New master password (12+ characters) > "), second = null;
+            boolean accepted = false;
+            try {
+                second = secret("  Confirm master password > ");
+                accepted = first.length >= 12 && Arrays.equals(first, second);
+                if (accepted) return first;
+                console.printf("%n  Use at least 12 characters and matching passwords.%n%n");
+            } finally {
+                if (!accepted) Arrays.fill(first, '\0');
+                if (second != null) Arrays.fill(second, '\0');
+            }
+        }
+    }
+    private static String generate() {
+        String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+";
+        SecureRandom random = new SecureRandom();
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < 24; i++) result.append(alphabet.charAt(random.nextInt(alphabet.length())));
+        return result.toString();
+    }
+    private static String safe(String text) {
+        StringBuilder result = new StringBuilder();
+        text.codePoints().forEach(c -> {
+            if (Character.isISOControl(c) || Character.getType(c) == Character.FORMAT) result.append(String.format("\\u%04x", c));
+            else result.appendCodePoint(c);
+        });
+        return result.toString();
     }
 }
